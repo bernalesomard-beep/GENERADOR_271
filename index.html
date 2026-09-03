@@ -288,7 +288,6 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
   var previewModalClose = document.getElementById('preview-modal-close');
 
   // URL del Web App de Google Apps Script para guardar el histórico (Nombre de Archivo + Fecha).
-  // Se completa una vez que el Sheet esté creado y el script publicado.
   var HISTORICO_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzccdlzzw6Rm9HaMKDaNeYTntTSRBkYRVLbB7-CjbZJJVYBy4rni2d6J-ni4F7rUp6ySQ/exec';
 
   previewModalClose.addEventListener('click', function () {
@@ -332,7 +331,6 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
   function extractOrdCode(baseName) {
     var m = baseName.match(/^ORD\d+/i);
     if (m) return m[0].toUpperCase();
-    // sin coincidencia: usa el primer segmento antes del primer guion bajo
     var seg = baseName.split('_')[0];
     return seg || baseName;
   }
@@ -434,6 +432,35 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
       return;
     }
 
+    // MODIFICACIÓN REQUERIDA: Saneamiento de columnas 1 (texto) y 17 (entero sin puntos, comas ni decimales)
+    rows = rows.map(function (row) {
+      var newRow = row.slice(); // clonar la fila para no mutar el array original directamente
+
+      // Columna 1 (Índice 0): Formato Texto estricto
+      if (newRow[0] !== null && newRow[0] !== undefined) {
+        var val1 = String(newRow[0]).trim();
+        // Si el texto es numérico y empieza con ceros, o simplemente para asegurar que Excel lo lea como texto puro
+        newRow[0] = val1;
+      } else {
+        newRow[0] = '';
+      }
+
+      // Columna 17 (Índice 16): Formato Número entero sin decimales, puntos ni comas
+      if (newRow.length > 16) {
+        var val17 = newRow[16];
+        if (val17 !== null && val17 !== undefined && val17 !== '') {
+          // Limpiar puntos, comas y cualquier carácter no numérico decimal (convertir a cadena, limpiar y parsear)
+          var cleanStr = String(val17).replace(/[.,]/g, '').replace(/\D/g, '');
+          var numInt = parseInt(cleanStr, 10);
+          newRow[16] = isNaN(numInt) ? 0 : numInt;
+        } else {
+          newRow[16] = 0;
+        }
+      }
+
+      return newRow;
+    });
+
     // Agrupar por OREF (pedido), preservando el orden de primera aparición
     var groups = [];
     var indexByOref = {};
@@ -466,12 +493,32 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
     });
     if (current.length) files.push(current);
 
-    // Construir los libros de salida
+    // Construir los libros de salida asegurando celdas de texto para la Columna 1 en SheetJS (usando 't: s' y 't: n')
     var now = new Date();
     var ordCode = extractOrdCode(state.baseName);
     var dateStr = formatDateForFilename(now);
     state.generatedFiles = files.map(function (rowsChunk, idx) {
       var wsOut = XLSX.utils.aoa_to_sheet(rowsChunk);
+      
+      // Forzar explícitamente el tipo de celda 's' (string) para la Columna 1 (A) y 'n' (number) para la Columna 17 (Q)
+      var range = XLSX.utils.decode_range(wsOut['!ref']);
+      for (var R = range.s.r; R <= range.e.r; ++R) {
+        // Columna 1 (A / índice 0)
+        var cellA_ref = XLSX.utils.encode_cell({ r: R, c: 0 });
+        if (wsOut[cellA_ref]) {
+          wsOut[cellA_ref].t = 's';
+          wsOut[cellA_ref].v = String(wsOut[cellA_ref].v);
+        }
+        // Columna 17 (Q / índice 16)
+        var cellQ_ref = XLSX.utils.encode_cell({ r: R, c: 16 });
+        if (wsOut[cellQ_ref]) {
+          wsOut[cellQ_ref].t = 'n';
+          var parsedNum = Number(wsOut[cellQ_ref].v);
+          wsOut[cellQ_ref].v = isNaN(parsedNum) ? 0 : Math.trunc(parsedNum);
+          wsOut[cellQ_ref].z = '0'; // Formato sin decimales
+        }
+      }
+
       var wbOut = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wbOut, wsOut, 'Hoja1');
       var correlativo = pad2(idx + 1);
@@ -589,7 +636,7 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
   window.previewGeneratedFile = previewGeneratedFile;
 
   function guardarHistoricoEnSheet(f) {
-    if (!HISTORICO_WEBHOOK_URL) return; // aún no conectado a Google Sheet
+    if (!HISTORICO_WEBHOOK_URL) return;
     fetch(HISTORICO_WEBHOOK_URL, {
       method: 'POST',
       mode: 'no-cors',
@@ -601,7 +648,7 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
         lineas: f.rowCount,
         detalle: f.rows
       })
-    }).catch(function () { /* fallo silencioso: no bloquea la descarga local */ });
+    }).catch(function () { });
   }
 
   function registerHistorico(newFiles) {
@@ -709,12 +756,11 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
             source: 'sheet'
           };
         });
-        // más recientes primero
         lista.reverse();
         state.historicoEntries = state.historicoEntries.concat(lista);
         renderHistoricoTable();
       })
-      .catch(function () { /* si falla la carga, se sigue trabajando solo con la sesión actual */ });
+      .catch(function () { });
   }
 
   loadHistoricoFromSheet();
