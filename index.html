@@ -186,6 +186,10 @@ Toma la hoja PLANTILLA (cabecera OREF = pedido, OLINCL = correlativo de línea),
 <span class="material-symbols-outlined">auto_awesome</span>
 <span class="">PROCESAR Y GENERAR ORD</span>
 </button>
+<button class="w-full mt-3 px-6 py-3.5 bg-surface-container-highest text-on-surface border border-outline-variant/40 rounded-xl font-label-md tracking-wider uppercase font-semibold hover:bg-primary hover:text-on-primary hover:border-primary transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed" disabled id="generate-aruma-btn">
+<span class="material-symbols-outlined">auto_awesome</span>
+<span class="">GENERAR ORD PARA ARUMA</span>
+</button>
 </div>
 </div>
 </section>
@@ -274,6 +278,8 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
   var fileMetaDisplay = document.getElementById('file-meta-display');
   var removeFileBtn = document.getElementById('remove-file');
   var generateBtn = document.getElementById('generate-btn');
+  var generateArumaBtn = document.getElementById('generate-aruma-btn');
+  var ARUMA_ORD_CODE = 'ORD000271'; // valor fijo que se escribe en Col36 (columna AK) para el modo Aruma
   var processError = document.getElementById('process-error');
   var splitWarning = document.getElementById('split-warning');
   var splitWarningText = document.getElementById('split-warning-text');
@@ -327,7 +333,7 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
 
   // Fuerza tipos/formatos de columna requeridos por el sistema destino:
   // Col1 (índice 0, OREF) = texto ; Col17 (índice 16, OEXDT) = número sin decimales
-  var TEXT_COLS = [0];
+  var TEXT_COLS = [0, 35];
   var INT_COLS = [16];
 
   function aoaToFormattedSheet(rows) {
@@ -407,6 +413,7 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
         fileMetaDisplay.textContent = formatBytes(file.size) + ' • Validado';
         uploadSuccess.classList.remove('hidden');
         generateBtn.removeAttribute('disabled');
+        generateArumaBtn.removeAttribute('disabled');
       } catch (err) {
         showError('No se pudo leer el archivo: ' + err.message);
         resetUpload();
@@ -424,6 +431,7 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
     fileInput.value = '';
     uploadSuccess.classList.add('hidden');
     generateBtn.setAttribute('disabled', 'true');
+    generateArumaBtn.setAttribute('disabled', 'true');
   }
 
   fileInput.addEventListener('change', function (e) {
@@ -463,7 +471,8 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
       row[0].toString().trim().toUpperCase() === HEADER_KEY;
   }
 
-  function processFile() {
+  function processFile(mode) {
+    var isAruma = mode === 'aruma';
     clearError();
     splitWarning.classList.add('hidden');
 
@@ -487,6 +496,12 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
       showError('No se encontraron filas de datos en la hoja "' + source.name + '".');
       return;
     }
+
+    // Modo Aruma: Columna 36 (índice 35 / AK) lleva el código ORD fijo en todas las líneas
+    rows.forEach(function (r) {
+      while (r.length < 36) r.push(null);
+      if (isAruma) r[35] = ARUMA_ORD_CODE;
+    });
 
     // Agrupar por OREF (pedido), preservando el orden de primera aparición
     var groups = [];
@@ -558,7 +573,8 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
     registerHistorico(state.generatedFiles);
   }
 
-  generateBtn.addEventListener('click', processFile);
+  generateBtn.addEventListener('click', function () { processFile('normal'); });
+  generateArumaBtn.addEventListener('click', function () { processFile('aruma'); });
 
   // ---------- Descarga ----------
 
