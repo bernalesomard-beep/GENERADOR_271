@@ -332,8 +332,9 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
   function pad2(n) { return n < 10 ? '0' + n : String(n); }
 
   // Fuerza tipos/formatos de columna requeridos por el sistema destino:
-  // Col1 (índice 0, OREF) = texto ; Col17 (índice 16, OEXDT) = número sin decimales
-  var TEXT_COLS = [0, 35];
+  // Col1 (índice 0, OREF) = texto ; Col14 (índice 13) = texto ; Col36 (índice 35) = texto ;
+  // Col17 (índice 16, OEXDT) = número sin decimales
+  var TEXT_COLS = [0, 13, 35];
   var INT_COLS = [16];
 
   function aoaToFormattedSheet(rows) {
@@ -364,6 +365,24 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
       });
     }
     return ws;
+  }
+
+  // Cuando el archivo se divide por el máximo de líneas, el correlativo de la
+  // Col2 (índice 1) de los archivos siguientes debe volver a empezar en 1.
+  // Se resta el desplazamiento para que la primera línea del archivo quede en 1
+  // y se mantenga la secuencia original del resto de líneas.
+  function restartCorrelativoCol2(rows) {
+    var first = null;
+    for (var i = 0; i < rows.length; i++) {
+      var n = Number(rows[i][1]);
+      if (rows[i][1] !== null && rows[i][1] !== '' && !isNaN(n)) { first = n; break; }
+    }
+    if (first === null) return;
+    var offset = first - 1;
+    rows.forEach(function (r) {
+      var n = Number(r[1]);
+      if (r[1] !== null && r[1] !== '' && !isNaN(n)) r[1] = n - offset;
+    });
   }
 
   function formatDateForFilename(d) {
@@ -541,6 +560,7 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
     var dateStr = formatDateForFilename(now);
     var correlativoBase = nextCorrelativoBase(ordCode, dateStr);
     state.generatedFiles = files.map(function (rowsChunk, idx) {
+      if (idx > 0) restartCorrelativoCol2(rowsChunk);
       var wsOut = aoaToFormattedSheet(rowsChunk);
       var wbOut = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wbOut, wsOut, 'Hoja1');
@@ -661,6 +681,31 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
   }
   window.previewGeneratedFile = previewGeneratedFile;
 
+  // Google Sheets convierte "0123" en 123 y "09:00" en hora al guardar, y por eso
+  // se perdía el formato de texto. Para evitarlo, los textos que parecen número u
+  // hora se envían con apóstrofe inicial (marca de texto de Sheets).
+  var RE_NUM_O_HORA = /^([+-]?\d+([.,]\d+)?|\d{1,2}:\d{2}(:\d{2})?)$/;
+  function rowsParaSheet(rows) {
+    return rows.map(function (r) {
+      return r.map(function (v) {
+        if (typeof v === 'string' && RE_NUM_O_HORA.test(v)) return "'" + v;
+        return v;
+      });
+    });
+  }
+
+  // Limpia lo que devuelve el Sheet (quita el apóstrofe de texto). Después,
+  // aoaToFormattedSheet vuelve a aplicar las reglas de texto/entero por columna.
+  function restaurarFilasDelSheet(rows) {
+    var RE_APOSTROFE = /^'(\d+([.,]\d+)?|\d{1,2}:\d{2}(:\d{2})?)$/;
+    return rows.map(function (r) {
+      return r.map(function (v) {
+        if (typeof v === 'string' && RE_APOSTROFE.test(v)) return v.slice(1);
+        return v;
+      });
+    });
+  }
+
   function guardarHistoricoEnSheet(f) {
     if (!HISTORICO_WEBHOOK_URL) return; // aún no conectado a Google Sheet
     fetch(HISTORICO_WEBHOOK_URL, {
@@ -672,7 +717,7 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
         fecha: formatDate(f.date),
         pedidos: f.pedidoCount,
         lineas: f.rowCount,
-        detalle: f.rows
+        detalle: rowsParaSheet(f.rows)
       })
     }).catch(function () { /* fallo silencioso: no bloquea la descarga local */ });
   }
@@ -755,6 +800,7 @@ Aún no se ha generado ningún archivo. Suba un archivo y presione "Procesar y G
       .then(function (data) {
         var rows = data.rows || [];
         if (!rows.length) throw new Error('El Sheet no tiene detalle guardado para este archivo.');
+        rows = restaurarFilasDelSheet(rows);
         entry.rows = rows;
         entry.blob = buildXlsBlobFromRows(rows);
         triggerBlobDownload(entry.blob, entry.nombreArchivo);
